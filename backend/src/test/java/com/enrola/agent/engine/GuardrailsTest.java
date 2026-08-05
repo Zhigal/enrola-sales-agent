@@ -38,4 +38,24 @@ class GuardrailsTest {
     void shortTextIsReturnedUnchanged() {
         assertThat(Guardrails.truncateAtSentence("Short.", 320)).isEqualTo("Short.");
     }
+
+    @Test
+    void everyTypographicCharacterIsMappedToItsGsm7Equivalent() {
+        assertThat(Guardrails.toGsm7("\u2018a\u2019")).isEqualTo("'a'");
+        assertThat(Guardrails.toGsm7("\u201Ca\u201D")).isEqualTo("\"a\"");
+        assertThat(Guardrails.toGsm7("a\u2013b\u2014c")).isEqualTo("a-b-c");
+        assertThat(Guardrails.toGsm7("a\u00A0b")).isEqualTo("a b");
+        assertThat(Guardrails.toGsm7("it\u2019s Anna")).isEqualTo("it's Anna");
+
+        // The one replacement that changes the length, which is why normalisation has to run
+        // before the limit check rather than after it.
+        assertThat(Guardrails.toGsm7("wait\u2026")).isEqualTo("wait...").hasSize(7);
+    }
+
+    @Test
+    void plainGsm7TextIsReturnedUnchanged() {
+        var text = "Hi John, it's Anna from Comparato - you asked us about health cover. "
+                + "Are you free today? Reply 'stop' to opt out.";
+        assertThat(Guardrails.toGsm7(text)).isEqualTo(text);
+    }
 }

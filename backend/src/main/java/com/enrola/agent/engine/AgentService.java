@@ -159,9 +159,15 @@ public class AgentService {
         var footer = Guardrails.footerFor(history);
         var budget = Guardrails.charBudget(customer.smsCharLimit(), history);
 
-        var sent = turn.message().length() <= budget
-                ? new Sent(turn.message(), turn, response)
-                : regenerateShorter(input, turn, response, budget, conversation);
+        // Normalise before measuring, not after. '...' is longer than the ellipsis it replaces,
+        // so a body measured raw can be sent over the limit - and the persisted body, the char
+        // count in the UI and the transcript all have to be what actually went out. The footer
+        // is already ASCII, so it needs no pass of its own.
+        var body = Guardrails.toGsm7(turn.message());
+
+        var sent = body.length() <= budget
+                ? new Sent(body, turn, response)
+                : regenerateShorter(input, body, turn, response, budget, conversation);
         var text = sent.body() + footer;
 
         messages.save(new Message(null, conversation.id(), MessageDirection.OUTBOUND, text,
@@ -185,26 +191,27 @@ public class AgentService {
     private record Sent(String body, AgentTurn turn, LlmResponse response) {}
 
     /** One nudge, then a hard truncation. The log line is the eval signal that the prompt drifted. */
-    private Sent regenerateShorter(List<InputItem> input, AgentTurn original,
+    private Sent regenerateShorter(List<InputItem> input, String originalBody, AgentTurn original,
                                    LlmResponse originalResponse, int budget,
                                    Conversation conversation) {
         input.add(InputItem.developer(("Your last message was %d characters. The hard limit is %d. "
-                + "Send the same thing, shorter.").formatted(original.message().length(), budget)));
+                + "Send the same thing, shorter.").formatted(originalBody.length(), budget)));
         try {
             var retry = llm.respond(input);
             if (retry.structuredJson() != null) {
                 var retryTurn = parse(retry.structuredJson());
-                if (retryTurn.message().length() <= budget) {
-                    return new Sent(retryTurn.message(), retryTurn, retry);
+                var retryBody = Guardrails.toGsm7(retryTurn.message());
+                if (retryBody.length() <= budget) {
+                    return new Sent(retryBody, retryTurn, retry);
                 }
             }
         } catch (RuntimeException e) {
             log.warn("Regenerate failed on conversation {}: {}", conversation.id(), e.toString());
         }
         log.warn("GUARDRAIL truncate: conversation {} message was {} chars, limit {}. "
-                + "The prompt needs work.", conversation.id(), original.message().length(), budget);
+                + "The prompt needs work.", conversation.id(), originalBody.length(), budget);
         // Truncation keeps the original output: the text is a prefix of what it described.
-        return new Sent(Guardrails.truncateAtSentence(original.message(), budget),
+        return new Sent(Guardrails.truncateAtSentence(originalBody, budget),
                 original, originalResponse);
     }
 

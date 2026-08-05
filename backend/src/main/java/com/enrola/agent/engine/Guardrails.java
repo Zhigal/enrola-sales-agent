@@ -49,6 +49,30 @@ public final class Guardrails {
         return OPT_OUT_WORDS.contains(normalised);
     }
 
+    /**
+     * Typographic punctuation to its GSM-7 equivalent. One character outside the GSM-7 alphabet
+     * forces the whole SMS into UCS-2, which drops the segment size from 160 to 70 - so a single
+     * invisible curly apostrophe doubles the send cost of every message it appears in.
+     *
+     * Note {@code ...} is longer than the ellipsis it replaces, so this has to run before any
+     * length check, not after.
+     *
+     * ponytail: covers the punctuation an LLM realistically emits, not the GSM-7 table. An emoji
+     * or an accented character still forces UCS-2 and is not caught here; real validation would
+     * need the full alphabet plus its extension set. Add that when a message actually gets one.
+     */
+    public static String toGsm7(String text) {
+        return text
+                .replace('\u2018', '\'')   // left single quotation mark
+                .replace('\u2019', '\'')   // right single quotation mark - the apostrophe
+                .replace('\u201C', '"')    // left double quotation mark
+                .replace('\u201D', '"')    // right double quotation mark
+                .replace('\u2013', '-')    // en dash
+                .replace('\u2014', '-')    // em dash
+                .replace('\u00A0', ' ')    // non-breaking space
+                .replace("\u2026", "..."); // ellipsis - one character becomes three
+    }
+
     public static String truncateAtSentence(String text, int limit) {
         if (text.length() <= limit) {
             return text;

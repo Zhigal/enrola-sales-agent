@@ -210,4 +210,41 @@ class GuardrailFlowTest extends DbTest {
                     assertThat(c.status()).isEqualTo(ConversationStatus.ENDED_GIVE_UP);
                 });
     }
+
+    /**
+     * The ordering property. Raw the body is 300 characters and legal; normalised it is 340 and
+     * is not, because each ellipsis becomes three characters. If normalisation ran after the
+     * limit check this turn would sail through and a 340-character body would be persisted.
+     */
+    @Test
+    void aBodyThatOnlyGoesOverBudgetOnceNormalisedIsStillCaughtByTheLimit() {
+        var id = startedConversation();
+        var ellipsisHeavy = "x".repeat(280) + "\u2026".repeat(20);
+        assertThat(ellipsisHeavy).hasSize(300); // under the 320 budget before normalisation
+        assertThat(Guardrails.toGsm7(ellipsisHeavy)).hasSize(340); // over it after
+
+        llm.queue(LlmResponse.message(turn(ellipsisHeavy)),
+                  LlmResponse.message(turn("Short enough now.")));
+
+        agent.handleInbound(id, "tell me everything");
+
+        assertThat(outbound(id)).last().isEqualTo("Short enough now.");
+        assertThat(llm.callCount()).isEqualTo(3); // opener, over-budget attempt, one regenerate
+    }
+
+    @Test
+    void typographicPunctuationNeverReachesThePersistedBody() {
+        llm.queue(LlmResponse.message(
+                turn("Hi John, it\u2019s Anna \u2014 we\u2019ve found better value\u2026 free today?")));
+        var id = agent.start(1L).id();
+
+        var body = outbound(id).getLast();
+        assertThat(body).doesNotContain("\u2019").contains("it's Anna").contains("Anna - we've");
+        assertThat(body).matches("\\A\\p{ASCII}*\\z"); // the transcripts must stay pure ASCII
+
+        // Normalisation happened before the length was taken, so the recorded length is the
+        // length of what went out - ellipsis expansion included.
+        var recorded = messages.findByConversationIdOrderByIdAsc(id).getLast();
+        assertThat(recorded.body()).isEqualTo(body).endsWith(Guardrails.OPT_OUT_FOOTER);
+    }
 }
