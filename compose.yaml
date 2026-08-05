@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: enrola
+      POSTGRES_USER: enrola
+      POSTGRES_PASSWORD: enrola
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enrola"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DB_HOST: postgres
+      CUSTOMERS_DIR: /customers
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports: ["8080:8080"]
+    volumes:
+      - ./customers:/customers
+
+  frontend:
+    build: ./frontend
+    depends_on: [backend]
+    environment:
+      VITE_API_URL: http://localhost:8080
+    ports: ["5173:5173"]
+    # ponytail: src only — mounting all of ./frontend would shadow the image's node_modules
+    volumes:
+      - ./frontend/src:/app/src
+
+volumes:
+  pgdata:
