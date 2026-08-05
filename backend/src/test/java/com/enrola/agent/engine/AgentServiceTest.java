@@ -3,6 +3,7 @@ package com.enrola.agent.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.enrola.agent.DbTest;
+import com.enrola.agent.calendly.RecordingCalendlyClient;
 import com.enrola.agent.conversation.ConversationRepository;
 import com.enrola.agent.conversation.ConversationStatus;
 import com.enrola.agent.conversation.MessageDirection;
@@ -19,6 +20,7 @@ class AgentServiceTest extends DbTest {
 
     @Autowired AgentService agent;
     @Autowired ScriptedLlmClient llm;
+    @Autowired RecordingCalendlyClient calendly;
     @Autowired ConversationRepository conversations;
     @Autowired MessageRepository messages;
     @Autowired BookingRepository bookings;
@@ -26,6 +28,7 @@ class AgentServiceTest extends DbTest {
     @BeforeEach
     void resetStub() {
         llm.reset();
+        calendly.reset();
     }
 
     private static String turn(String message, Stage stage) {
@@ -90,9 +93,9 @@ class AgentServiceTest extends DbTest {
                 LlmResponse.message(turn("Opening question?", Stage.SITUATION)),
                 LlmResponse.toolCalls(new InputItem.FunctionCall("c1", "get_available_times",
                         "{\"start_time\":\"2026-08-05T00:00:00Z\",\"end_time\":\"2026-08-09T00:00:00Z\"}")),
+                // Time only - the tool schema no longer asks the model for an identity.
                 LlmResponse.toolCalls(new InputItem.FunctionCall("c2", "book_call",
-                        ("{\"name\":\"John\",\"phone\":\"+61457099876\","
-                         + "\"email\":\"john@example.com\",\"start_time\":\"" + slotIso + "\"}"))),
+                        "{\"start_time\":\"" + slotIso + "\"}")),
                 LlmResponse.message("""
                     {"message":"Booked - Thursday 6 August at 9:00 AM.","stage":"CONFIRM",
                      "goalMet":true,"unsubscribed":false,"endConversation":true,
@@ -109,6 +112,92 @@ class AgentServiceTest extends DbTest {
                 });
         assertThat(conversations.findById(conversation.id()).orElseThrow().status())
                 .isEqualTo(ConversationStatus.GOAL_MET);
+    }
+
+    /**
+     * The security property behind shrinking the book_call schema. The model here supplies an
+     * identity anyway - which is exactly what a successful prompt injection would produce, since
+     * the transcript is attacker-controlled text and the model is the thing reading it. The
+     * booking must still go to the lead on file. An injection may move the appointment; it must
+     * not redirect the invite.
+     */
+    @Test
+    void theBookingUsesTheLeadOnFileAndNotTheIdentityTheModelSupplied() {
+        var slotIso = "2026-08-06T09:00:00+08:00";
+        llm.queue(
+                LlmResponse.message(turn("Opening question?", Stage.SITUATION)),
+                LlmResponse.toolCalls(new InputItem.FunctionCall("c1", "book_call",
+                        ("{\"name\":\"Mallory\",\"phone\":\"+61400000000\","
+                         + "\"email\":\"attacker@evil.example\",\"start_time\":\""
+                         + slotIso + "\"}"))),
+                LlmResponse.message(turn("Booked.", Stage.CONFIRM)));
+
+        var conversation = agent.start(1L); // John, per data.sql
+        agent.handleInbound(conversation.id(), "book me in");
+
+        assertThat(calendly.lastBooking()).isNotNull().satisfies(b -> {
+            assertThat(b.email()).isEqualTo("john@example.com");
+            assertThat(b.phone()).isEqualTo("+61457099876");
+            assertThat(b.name()).isEqualTo("John");
+            // The one thing the model is still trusted with.
+            assertThat(b.startTime()).isEqualTo(Instant.parse("2026-08-06T01:00:00Z"));
+        });
+    }
+
+    /**
+     * The number the prompt promises the model and the number the guardrail enforces must be the
+     * same number, on the same message. They are computed in two different classes, so nothing
+     * but this test stops them drifting - and the drift is silent: the model writes to the budget
+     * it was told about and the guardrail truncates it for exceeding one it was not.
+     *
+     * Pinned from both sides on the first outbound message, where the mandatory opt-out footer
+     * eats into the limit. Exactly the promised length must go out untouched; one character more
+     * must trigger the regenerate. Assert only the first half and a too-generous promise still
+     * passes.
+     */
+    @Test
+    void thePromisedCharacterLimitIsTheOneTheGuardrailEnforces() {
+        llm.queue(LlmResponse.message(turn("Opening question?", Stage.SITUATION)));
+        var id = agent.start(1L).id();
+        var promised = promisedLimit();
+
+        // reset() wipes the thread, so its opener is a first outbound again: same footer,
+        // same budget, same promise.
+        var exact = "a".repeat(promised);
+        llm.reset();
+        llm.queue(LlmResponse.message(turn(exact, Stage.SITUATION)));
+        agent.reset(id);
+
+        assertThat(promisedLimit()).isEqualTo(promised);
+        assertThat(llm.callCount()).isEqualTo(1); // no regenerate: it was inside the budget
+        assertThat(lastOutbound(id)).isEqualTo(exact + Guardrails.OPT_OUT_FOOTER);
+
+        var overBy1 = "b".repeat(promised + 1);
+        llm.reset();
+        llm.queue(LlmResponse.message(turn(overBy1, Stage.SITUATION)),
+                  LlmResponse.message(turn("Short enough.", Stage.SITUATION)));
+        agent.reset(id);
+
+        assertThat(llm.callCount()).isEqualTo(2); // one over the promise is one over the limit
+        assertThat(lastOutbound(id)).isEqualTo("Short enough." + Guardrails.OPT_OUT_FOOTER);
+    }
+
+    /** The limit as the model was told it, read back out of the prompt it actually received. */
+    private int promisedLimit() {
+        var prompt = llm.lastInput().stream()
+                .filter(InputItem.Text.class::isInstance)
+                .map(i -> ((InputItem.Text) i).content())
+                .collect(java.util.stream.Collectors.joining("\n"));
+        var matcher = java.util.regex.Pattern
+                .compile("Character limit for each message: (\\d+)").matcher(prompt);
+        assertThat(matcher.find()).as("runtime context states a character limit").isTrue();
+        return Integer.parseInt(matcher.group(1));
+    }
+
+    private String lastOutbound(Long id) {
+        return messages.findByConversationIdOrderByIdAsc(id).stream()
+                .filter(m -> m.direction() == MessageDirection.OUTBOUND)
+                .map(m -> m.body()).reduce((a, b) -> b).orElseThrow();
     }
 
     @Test

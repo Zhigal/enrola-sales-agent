@@ -1,5 +1,6 @@
 package com.enrola.agent;
 
+import com.enrola.agent.calendly.RecordingCalendlyClient;
 import com.enrola.agent.engine.ScriptedLlmClient;
 import java.time.Clock;
 import java.time.Instant;
@@ -60,6 +61,13 @@ public abstract class DbTest {
         @Primary
         ScriptedLlmClient scriptedLlm() {
             return new ScriptedLlmClient();
+        }
+
+        /** Same behaviour as the component-scanned stub, but it remembers what it was asked to book. */
+        @Bean
+        @Primary
+        RecordingCalendlyClient recordingCalendly(Clock clock) {
+            return new RecordingCalendlyClient(clock);
         }
     }
 }
