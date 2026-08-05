@@ -1,1 +1,9 @@
 /.idea/
+.env
+/private/
+target/
+node_modules/
+frontend/dist/
+/.superpowers/
+/.claude/
+/.playwright-mcp/
