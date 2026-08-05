@@ -118,33 +118,54 @@ class GuardrailFlowTest extends DbTest {
         agent.handleInbound(id, "tell me everything");
 
         assertThat(outbound(id)).last().isEqualTo("Short enough now.");
+
+        // The persisted audit trail must describe the message that was actually sent, not the
+        // discarded over-length attempt.
+        var recorded = messages.findByConversationIdOrderByIdAsc(id).getLast();
+        assertThat(recorded.structuredOutput()).contains("Short enough now.");
     }
 
     @Test
     void afterTheGoalIsMetExactlyOneMoreMessageGoesOutThenItIsTerminal() {
         var id = startedConversation();
+
+        // One objection first, so the conversation carries objectionCount 1 into the booking.
+        llm.queue(LlmResponse.message("""
+            {"message":"Are you sure I can't change your mind?","stage":"SUGGEST_CALL",
+             "goalMet":false,"unsubscribed":false,"endConversation":false,"endReason":"NONE",
+             "objectionRaised":true}
+            """));
+        agent.handleInbound(id, "not really interested");
+        assertThat(conversations.findById(id).orElseThrow().objectionCount()).isEqualTo(1);
+
         llm.queue(LlmResponse.message("""
             {"message":"Booked - Thursday 6 August at 9:00 AM.","stage":"CONFIRM","goalMet":true,
              "unsubscribed":false,"endConversation":true,"endReason":"BOOKED",
              "objectionRaised":false}
             """));
-        agent.handleInbound(id, "9am works");
+        agent.handleInbound(id, "go on then, 9am works");
         assertThat(conversations.findById(id).orElseThrow().status())
                 .isEqualTo(ConversationStatus.GOAL_MET);
 
-        // objectionRaised true on purpose: a grumble after a booking must not turn a booked
-        // call into ENDED_GIVE_UP. With the objection check above the goodbye-loop check, it did.
+        // The final grumble carries objectionRaised, taking the count from 1 to 2 - past the
+        // backstop threshold. That is what makes this test discriminate: with the objection
+        // check placed above the goodbye-loop check, this turn lands in ENDED_GIVE_UP and the
+        // assertion below fails. Without the earlier objection the count only reaches 1, the
+        // backstop never fires either way, and the two orderings are indistinguishable.
         llm.queue(LlmResponse.message("""
             {"message":"No worries.","stage":"CLOSED","goalMet":true,"unsubscribed":false,
              "endConversation":true,"endReason":"BOOKED","objectionRaised":true}
             """));
         agent.handleInbound(id, "thank you! bit of a hassle though");
-        assertThat(conversations.findById(id).orElseThrow().status())
-                .isEqualTo(ConversationStatus.GOAL_MET_CLOSED);
+        assertThat(conversations.findById(id).orElseThrow())
+                .satisfies(c -> {
+                    assertThat(c.objectionCount()).isEqualTo(2);
+                    assertThat(c.status()).isEqualTo(ConversationStatus.GOAL_MET_CLOSED);
+                });
 
         assertThatThrownBy(() -> agent.handleInbound(id, "you too!"))
                 .isInstanceOf(AgentService.ConversationClosedException.class);
-        assertThat(outbound(id)).hasSize(3); // opener, confirmation, one closing line
+        assertThat(outbound(id)).hasSize(4); // opener, one push-back, confirmation, closing line
     }
 
     @Test

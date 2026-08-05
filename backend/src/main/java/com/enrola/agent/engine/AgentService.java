@@ -161,42 +161,53 @@ public class AgentService {
         var footer = isFirstOutbound ? Guardrails.OPT_OUT_FOOTER : "";
         var budget = customer.smsCharLimit() - footer.length();
 
-        var body = turn.message();
-        if (body.length() > budget) {
-            body = regenerateShorter(input, body, budget, conversation);
-        }
-        var text = body + footer;
+        var sent = turn.message().length() <= budget
+                ? new Sent(turn.message(), turn, response)
+                : regenerateShorter(input, turn, response, budget, conversation);
+        var text = sent.body() + footer;
 
         messages.save(new Message(null, conversation.id(), MessageDirection.OUTBOUND, text,
-                customer.prompt().version(), model, response.tokensIn(), response.tokensOut(),
-                response.structuredJson(), clock.instant()));
+                customer.prompt().version(), model, sent.response().tokensIn(),
+                sent.response().tokensOut(), sent.response().structuredJson(), clock.instant()));
 
         if (pending.booking != null) {
             bookings.save(new Booking(null, conversation.id(),
                     customer.calendlyEventId(), pending.booking));
         }
-        return conversations.save(nextState(conversation, turn));
+        return conversations.save(nextState(conversation, sent.turn()));
     }
 
+    /**
+     * What actually went out, and the model output that produced it. These travel together
+     * because a successful regenerate replaces the message: persisting the first attempt's
+     * structured output alongside the second attempt's text would leave an audit trail
+     * describing a message that was never sent - and that record is what a compliance review
+     * or a prompt-version comparison would be reading.
+     */
+    private record Sent(String body, AgentTurn turn, LlmResponse response) {}
+
     /** One nudge, then a hard truncation. The log line is the eval signal that the prompt drifted. */
-    private String regenerateShorter(List<InputItem> input, String original, int budget,
-                                     Conversation conversation) {
+    private Sent regenerateShorter(List<InputItem> input, AgentTurn original,
+                                   LlmResponse originalResponse, int budget,
+                                   Conversation conversation) {
         input.add(InputItem.developer(("Your last message was %d characters. The hard limit is %d. "
-                + "Send the same thing, shorter.").formatted(original.length(), budget)));
+                + "Send the same thing, shorter.").formatted(original.message().length(), budget)));
         try {
             var retry = llm.respond(input);
             if (retry.structuredJson() != null) {
-                var shorter = parse(retry.structuredJson()).message();
-                if (shorter.length() <= budget) {
-                    return shorter;
+                var retryTurn = parse(retry.structuredJson());
+                if (retryTurn.message().length() <= budget) {
+                    return new Sent(retryTurn.message(), retryTurn, retry);
                 }
             }
         } catch (RuntimeException e) {
             log.warn("Regenerate failed on conversation {}: {}", conversation.id(), e.toString());
         }
         log.warn("GUARDRAIL truncate: conversation {} message was {} chars, limit {}. "
-                + "The prompt needs work.", conversation.id(), original.length(), budget);
-        return Guardrails.truncateAtSentence(original, budget);
+                + "The prompt needs work.", conversation.id(), original.message().length(), budget);
+        // Truncation keeps the original output: the text is a prefix of what it described.
+        return new Sent(Guardrails.truncateAtSentence(original.message(), budget),
+                original, originalResponse);
     }
 
     /**
