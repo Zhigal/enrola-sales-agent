@@ -1,0 +1,5 @@
+id: alpha
+agentName: Ada
+calendlyEventId: evt_alpha
+timezone: Australia/Melbourne
+smsCharLimit: 320

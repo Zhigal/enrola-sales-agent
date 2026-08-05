@@ -1,0 +1,5 @@
+id: beta
+agentName: Bo
+calendlyEventId: evt_beta
+timezone: Australia/Perth
+smsCharLimit: 160
