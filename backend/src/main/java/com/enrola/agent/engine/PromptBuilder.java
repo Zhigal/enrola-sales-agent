@@ -29,7 +29,7 @@ public class PromptBuilder {
         items.add(InputItem.system(customer.prompt().content()));
         items.add(InputItem.system("REFERENCE MATERIAL ABOUT THE CUSTOMER\n\n"
                 + customer.infoPack().content()));
-        items.add(InputItem.system(runtimeContext(customer, lead, conversation)));
+        items.add(InputItem.system(runtimeContext(customer, lead, conversation, history)));
 
         for (var message : history) {
             items.add(message.direction() == MessageDirection.OUTBOUND
@@ -43,14 +43,25 @@ public class PromptBuilder {
         return items;
     }
 
-    private String runtimeContext(CustomerConfig customer, Lead lead, Conversation conversation) {
+    /**
+     * The character limit shown here is the one {@code AgentService} will enforce on the very
+     * message this prompt produces, footer included - see {@code Guardrails.charBudget}. Showing
+     * the raw SMS limit instead would hand the model a budget ~25 characters too generous on the
+     * opening message and get its output truncated for going over a line it was never told about.
+     *
+     * The timezone is the advisor's, and is labelled as such. It is the customer's configured
+     * zone, and the leads are not all in it - telling the model it is the lead's zone would be
+     * a plain falsehood the model then reasons from when it offers times.
+     */
+    private String runtimeContext(CustomerConfig customer, Lead lead, Conversation conversation,
+                                  List<Message> history) {
         var now = clock.instant().atZone(customer.timezone());
         return """
             RUNTIME CONTEXT
 
             Your name: %s
             Character limit for each message: %d
-            Current date and time in the lead's timezone (%s): %s
+            Current date and time in the advisor's timezone (%s): %s
             Objections this lead has already raised: %d
 
             THE LEAD
@@ -60,7 +71,7 @@ public class PromptBuilder {
             Current monthly premium: %s
             """.formatted(
                 customer.agentName(),
-                customer.smsCharLimit(),
+                Guardrails.charBudget(customer.smsCharLimit(), history),
                 customer.timezone(),
                 HUMAN.format(now),
                 conversation.objectionCount(),

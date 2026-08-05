@@ -109,7 +109,8 @@ public class OpenAiLlmClient implements LlmClient {
         return array;
     }
 
-    private ArrayNode tools() {
+    /** Package-private and static so the schema can be asserted without an HTTP call. */
+    static ArrayNode tools() {
         var tools = JSON.createArrayNode();
 
         var times = tools.addObject();
@@ -132,17 +133,18 @@ public class OpenAiLlmClient implements LlmClient {
         var book = tools.addObject();
         book.put("type", "function");
         book.put("name", "book_call");
-        book.put("description", "Book the advisor call. Returns the booking id.");
+        book.put("description", "Book the advisor call for this lead. Returns the booking id. "
+                + "The lead's name, phone and email are already on file and are supplied "
+                + "automatically - only the time is needed.");
         book.put("strict", true);
         var bookParams = book.putObject("parameters");
         bookParams.put("type", "object");
         bookParams.put("additionalProperties", false);
-        bookParams.putArray("required")
-                .add("name").add("phone").add("email").add("start_time");
+        // Time only. The identity comes from the Lead record in AgentService.bookCall, never
+        // from the model: text in the transcript can move the appointment but cannot redirect
+        // the invite to an attacker's address.
+        bookParams.putArray("required").add("start_time");
         var bookProps = bookParams.putObject("properties");
-        bookProps.putObject("name").put("type", "string");
-        bookProps.putObject("phone").put("type", "string");
-        bookProps.putObject("email").put("type", "string");
         bookProps.putObject("start_time").put("type", "string")
                 .put("description", "One of the start times returned by get_available_times");
 

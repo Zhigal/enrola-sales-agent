@@ -156,10 +156,8 @@ public class AgentService {
                     conversation, customer.prompt().version(), model, response);
         }
 
-        var isFirstOutbound = history.stream()
-                .noneMatch(m -> m.direction() == MessageDirection.OUTBOUND);
-        var footer = isFirstOutbound ? Guardrails.OPT_OUT_FOOTER : "";
-        var budget = customer.smsCharLimit() - footer.length();
+        var footer = Guardrails.footerFor(history);
+        var budget = Guardrails.charBudget(customer.smsCharLimit(), history);
 
         var sent = turn.message().length() <= budget
                 ? new Sent(turn.message(), turn, response)
@@ -292,9 +290,12 @@ public class AgentService {
 
     private String bookCall(JsonNode args, CustomerConfig customer, Lead lead,
                             PendingBooking pending) throws Exception {
+        // The model supplies the time; the code supplies the identity. Reading name/phone/email
+        // from the Lead rather than from the tool arguments means a prompt injection can at
+        // worst move the appointment, not redirect the invite somewhere else.
         var start = OffsetDateTime.parse(args.get("start_time").asText()).toInstant();
-        var id = calendly.book(customer.calendlyEventId(), args.get("name").asText(),
-                args.get("phone").asText(), args.get("email").asText(), start);
+        var id = calendly.book(customer.calendlyEventId(), lead.givenName(),
+                lead.phone(), lead.email(), start);
         pending.booking = start;
         return JSON.writeValueAsString(java.util.Map.of("id", id));
     }
