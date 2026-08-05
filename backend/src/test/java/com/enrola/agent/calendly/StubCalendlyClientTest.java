@@ -38,12 +38,25 @@ class StubCalendlyClientTest {
 
     @Test
     void neverOffersAWeekend() {
-        var slots = client.availableTimes(PERTH, NOW, NOW.plus(Duration.ofDays(14)));
+        // The window must START near the weekend. NOW is a Wednesday, and 14 bookable slots a
+        // day means MAX_SLOTS (20) is reached partway through Thursday - so a Wednesday-anchored
+        // 14-day query never reaches Saturday, and this assertion would hold even with the
+        // weekend check deleted. Anchoring on Friday makes it a real test: Fri fills, Sat and
+        // Sun must contribute nothing, Mon takes the remainder.
+        // 4 days, not 3: friday+3d lands at Monday 08:00 Perth, before the 09:00 first slot,
+        // so a 3-day window returns Friday only and never reaches Monday at all.
+        var friday = NOW.plus(Duration.ofDays(2));
+        var slots = client.availableTimes(PERTH, friday, friday.plus(Duration.ofDays(4)));
 
+        assertThat(slots).isNotEmpty();
         assertThat(slots).allSatisfy(slot -> {
             var day = slot.atZone(PERTH).getDayOfWeek().getValue();
             assertThat(day).isLessThanOrEqualTo(5);
         });
+        // Proves the window genuinely spanned the weekend rather than stopping short of it.
+        assertThat(slots).anySatisfy(slot ->
+                assertThat(slot.atZone(PERTH).getDayOfWeek())
+                        .isEqualTo(java.time.DayOfWeek.MONDAY));
     }
 
     @Test

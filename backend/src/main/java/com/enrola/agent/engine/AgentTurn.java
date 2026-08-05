@@ -9,11 +9,6 @@ public record AgentTurn(
         EndReason endReason,
         boolean objectionRaised) {
 
-    public AgentTurn withMessage(String replacement) {
-        return new AgentTurn(replacement, stage, goalMet, unsubscribed,
-                endConversation, endReason, objectionRaised);
-    }
-
     /** Strict JSON Schema for the Responses API text.format. */
     public static final String SCHEMA_JSON = """
         {

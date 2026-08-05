@@ -40,7 +40,11 @@ class RepositoryTest extends DbTest {
         var c = conversations.save(new Conversation(
                 null, 2L, "comparato", ConversationStatus.ACTIVE, 0, now, now));
         messages.save(Message.inbound(c.id(), "first", now));
-        messages.save(Message.inbound(c.id(), "second", now.plusSeconds(1)));
+        // Deliberately backdated. Inserted sequentially, id order and created_at order coincide,
+        // so the test could not tell OrderByIdAsc from OrderByCreatedAtAsc - and it is id order
+        // that is the contract, because ids are the only monotonic thing here. Backdating the
+        // second row makes the two orderings disagree, so the assertion now discriminates.
+        messages.save(Message.inbound(c.id(), "second", now.minusSeconds(3600)));
 
         assertThat(messages.findByConversationIdOrderByIdAsc(c.id()))
                 .extracting(Message::body)

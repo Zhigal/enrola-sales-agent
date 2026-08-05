@@ -40,6 +40,54 @@ class ScriptedLlmClientTest {
                 .readTree(AgentTurn.SCHEMA_JSON);
 
         assertThat(schema.get("additionalProperties").asBoolean()).isFalse();
-        assertThat(schema.get("required")).hasSize(schema.get("properties").size());
+
+        // Membership, not size. Two sets can have the same size while naming different things -
+        // one renamed key on one side only - and strict mode rejects the whole request for it.
+        assertThat(names(schema.get("required")))
+                .isEqualTo(fieldNames(schema.get("properties")));
+    }
+
+    /**
+     * The schema is hand-written text while the Java types are code, so there are three places
+     * the same names live and nothing but this test keeps them in step. Drift here fails at
+     * runtime - a rejected API request, or Jackson quietly binding null into a record component -
+     * which is the worst place to find out.
+     */
+    @Test
+    void schemaMatchesTheJavaTypes() throws Exception {
+        var schema = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(AgentTurn.SCHEMA_JSON);
+
+        assertThat(fieldNames(schema.get("properties")))
+                .isEqualTo(java.util.Arrays.stream(AgentTurn.class.getRecordComponents())
+                        .map(java.lang.reflect.RecordComponent::getName)
+                        .collect(java.util.stream.Collectors.toSet()));
+
+        assertThat(enumValues(schema, "stage"))
+                .containsExactly(java.util.Arrays.stream(Stage.values())
+                        .map(Enum::name).toArray(String[]::new));
+        assertThat(enumValues(schema, "endReason"))
+                .containsExactly(java.util.Arrays.stream(EndReason.values())
+                        .map(Enum::name).toArray(String[]::new));
+    }
+
+    private static java.util.Set<String> names(com.fasterxml.jackson.databind.JsonNode array) {
+        var out = new java.util.HashSet<String>();
+        array.forEach(node -> out.add(node.asText()));
+        return out;
+    }
+
+    private static java.util.Set<String> fieldNames(
+            com.fasterxml.jackson.databind.JsonNode object) {
+        var out = new java.util.HashSet<String>();
+        object.fieldNames().forEachRemaining(out::add);
+        return out;
+    }
+
+    private static java.util.List<String> enumValues(
+            com.fasterxml.jackson.databind.JsonNode schema, String property) {
+        var out = new java.util.ArrayList<String>();
+        schema.get("properties").get(property).get("enum").forEach(node -> out.add(node.asText()));
+        return out;
     }
 }
