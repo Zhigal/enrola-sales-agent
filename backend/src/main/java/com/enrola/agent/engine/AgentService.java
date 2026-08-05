@@ -88,7 +88,34 @@ public class AgentService {
         // failure leaves a record that the lead texted.
         var history = messages.findByConversationIdOrderByIdAsc(conversation.id());
         messages.save(Message.inbound(conversation.id(), body, clock.instant()));
+
+        if (Guardrails.isExactOptOut(body)) {
+            return sendOptOutConfirmation(conversation);
+        }
         return runTurn(conversation, lead, body, history);
+    }
+
+    /** Fast path: zero tokens, nothing to attribute. */
+    private Conversation sendOptOutConfirmation(Conversation conversation) {
+        return sendOptOutConfirmation(conversation, null, null, null);
+    }
+
+    /**
+     * Both paths send byte-identical text. They differ in what is recorded: on the fuzzy path
+     * the model's flag is what fired the guardrail, so the prompt version, model and the
+     * discarded structured output are kept. Without them there is no evidence for whether the
+     * model got that flag right, which is the only question worth asking about the fuzzy path.
+     */
+    private Conversation sendOptOutConfirmation(Conversation conversation, String promptVersion,
+                                                String modelId, LlmResponse response) {
+        var now = clock.instant();
+        messages.save(new Message(null, conversation.id(), MessageDirection.OUTBOUND,
+                Guardrails.OPT_OUT_REPLY, promptVersion, modelId,
+                response == null ? null : response.tokensIn(),
+                response == null ? null : response.tokensOut(),
+                response == null ? null : response.structuredJson(), now));
+        return conversations.save(
+                conversation.withStatus(ConversationStatus.UNSUBSCRIBED, now));
     }
 
     @Transactional
@@ -121,9 +148,24 @@ public class AgentService {
         var response = callWithTools(customer, lead, conversation, input, pending);
         var turn = parse(response.structuredJson());
 
+        // Fuzzy opt-out: the model's message is discarded outright. One approved wording exists,
+        // and the prompt tells the agent to end every message with a question - which is exactly
+        // wrong immediately after someone asks to be left alone.
+        if (turn.unsubscribed()) {
+            return sendOptOutConfirmation(
+                    conversation, customer.prompt().version(), model, response);
+        }
+
         var isFirstOutbound = history.stream()
                 .noneMatch(m -> m.direction() == MessageDirection.OUTBOUND);
-        var text = finalise(turn, customer, isFirstOutbound);
+        var footer = isFirstOutbound ? Guardrails.OPT_OUT_FOOTER : "";
+        var budget = customer.smsCharLimit() - footer.length();
+
+        var body = turn.message();
+        if (body.length() > budget) {
+            body = regenerateShorter(input, body, budget, conversation);
+        }
+        var text = body + footer;
 
         messages.save(new Message(null, conversation.id(), MessageDirection.OUTBOUND, text,
                 customer.prompt().version(), model, response.tokensIn(), response.tokensOut(),
@@ -134,6 +176,62 @@ public class AgentService {
                     customer.calendlyEventId(), pending.booking));
         }
         return conversations.save(nextState(conversation, turn));
+    }
+
+    /** One nudge, then a hard truncation. The log line is the eval signal that the prompt drifted. */
+    private String regenerateShorter(List<InputItem> input, String original, int budget,
+                                     Conversation conversation) {
+        input.add(InputItem.developer(("Your last message was %d characters. The hard limit is %d. "
+                + "Send the same thing, shorter.").formatted(original.length(), budget)));
+        try {
+            var retry = llm.respond(input);
+            if (retry.structuredJson() != null) {
+                var shorter = parse(retry.structuredJson()).message();
+                if (shorter.length() <= budget) {
+                    return shorter;
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("Regenerate failed on conversation {}: {}", conversation.id(), e.toString());
+        }
+        log.warn("GUARDRAIL truncate: conversation {} message was {} chars, limit {}. "
+                + "The prompt needs work.", conversation.id(), original.length(), budget);
+        return Guardrails.truncateAtSentence(original, budget);
+    }
+
+    /**
+     * Order matters, and every position here is a decision:
+     *
+     * 1. Abuse wins outright. Nothing else about the turn changes the answer.
+     * 2. The goodbye-loop guard sits above both the objection counter and goalMet. Above
+     *    goalMet because the model keeps reporting goalMet true on every turn after the
+     *    booking, so testing goalMet first would hold the conversation in GOAL_MET forever
+     *    and never close it. Above the objection counter because a booked call that then
+     *    draws a grumble is still a booked call - landing it in ENDED_GIVE_UP would misreport
+     *    the outcome to the platform.
+     * 3. The objection backstop, so the model cannot push a third time.
+     */
+    private Conversation nextState(Conversation conversation, AgentTurn turn) {
+        var now = clock.instant();
+        var objections = conversation.objectionCount() + (turn.objectionRaised() ? 1 : 0);
+        var updated = conversation.withObjectionCount(objections, now);
+
+        if (turn.endReason() == EndReason.ABUSE) {
+            return updated.withStatus(ConversationStatus.ENDED_ABUSE, now);
+        }
+        if (conversation.status() == ConversationStatus.GOAL_MET) {
+            return updated.withStatus(ConversationStatus.GOAL_MET_CLOSED, now);
+        }
+        if (objections >= 2) {
+            return updated.withStatus(ConversationStatus.ENDED_GIVE_UP, now);
+        }
+        if (turn.goalMet()) {
+            return updated.withStatus(ConversationStatus.GOAL_MET, now);
+        }
+        if (turn.endConversation()) {
+            return updated.withStatus(ConversationStatus.ENDED_GIVE_UP, now);
+        }
+        return updated.withStatus(ConversationStatus.ACTIVE, now);
     }
 
     private LlmResponse callWithTools(CustomerConfig customer, Lead lead,
@@ -199,20 +297,6 @@ public class AgentService {
         } catch (Exception e) {
             throw new IllegalStateException("Unparseable model output: " + structuredJson, e);
         }
-    }
-
-    /** Extended in Task 9 into the full guardrail chain. */
-    private String finalise(AgentTurn turn, CustomerConfig customer, boolean isFirstOutbound) {
-        return isFirstOutbound ? turn.message() + Guardrails.OPT_OUT_FOOTER : turn.message();
-    }
-
-    /** Extended in Task 9 into the full state machine. */
-    private Conversation nextState(Conversation conversation, AgentTurn turn) {
-        var now = clock.instant();
-        if (turn.goalMet()) {
-            return conversation.withStatus(ConversationStatus.GOAL_MET, now);
-        }
-        return conversation.withStatus(conversation.status(), now);
     }
 
     private static final class PendingBooking {
