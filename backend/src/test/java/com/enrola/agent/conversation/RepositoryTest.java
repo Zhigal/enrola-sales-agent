@@ -3,12 +3,30 @@ package com.enrola.agent.conversation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.enrola.agent.DbTest;
+import com.enrola.agent.engine.LlmClient;
 import com.enrola.agent.lead.LeadRepository;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 
+// AgentService now requires an LlmClient bean to construct, and there is no production
+// implementation yet (that lands with the real OpenAI client). This test never exercises
+// the agent, so the stub only needs to exist, not do anything.
+@Import(RepositoryTest.Stubs.class)
 class RepositoryTest extends DbTest {
+
+    @TestConfiguration
+    static class Stubs {
+        @Bean
+        LlmClient llmClient() {
+            return input -> {
+                throw new UnsupportedOperationException("RepositoryTest does not call the LLM");
+            };
+        }
+    }
 
     @Autowired LeadRepository leads;
     @Autowired ConversationRepository conversations;

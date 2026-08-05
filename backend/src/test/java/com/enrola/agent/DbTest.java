@@ -6,7 +6,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-@SpringBootTest
+// AgentServiceTest overrides the production Clock bean with a fixed one via @TestConfiguration,
+// which Spring Boot rejects by default (two bean definitions named "clock"). Allowing overrides
+// here is scoped to the test classpath only; production startup is unaffected.
+@SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @Testcontainers
 public abstract class DbTest {
 
