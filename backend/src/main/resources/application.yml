@@ -1,0 +1,18 @@
+spring:
+  application.name: enrola-agent
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/enrola
+    username: enrola
+    password: enrola
+  sql.init.mode: always
+
+enrola:
+  customers-dir: ${CUSTOMERS_DIR:../customers}
+  cors-origin: http://localhost:5173
+  openai:
+    base-url: https://api.openai.com/v1
+    api-key: ${OPENAI_API_KEY:}
+    model: gpt-5.6-terra
+    timeout-seconds: 60
+
+logging.level.com.enrola.agent: DEBUG
