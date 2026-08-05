@@ -8,26 +8,14 @@ import com.enrola.agent.conversation.ConversationStatus;
 import com.enrola.agent.conversation.MessageDirection;
 import com.enrola.agent.conversation.MessageRepository;
 import com.enrola.agent.conversation.BookingRepository;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
 
-@Import(AgentServiceTest.Stubs.class)
 class AgentServiceTest extends DbTest {
 
-    static final Instant NOW = Instant.parse("2026-08-05T00:00:00Z"); // Wed 08:00 Perth
-
-    @TestConfiguration
-    static class Stubs {
-        @Bean Clock clock() { return Clock.fixed(NOW, ZoneOffset.UTC); }
-        @Bean ScriptedLlmClient llm() { return new ScriptedLlmClient(); }
-    }
+    // NOW and the scripted model both come from DbTest.Stubs.
 
     @Autowired AgentService agent;
     @Autowired ScriptedLlmClient llm;
