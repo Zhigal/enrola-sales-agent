@@ -61,4 +61,16 @@ class CustomerRegistryTest {
         assertThat(reloadable.content()).isEqualTo("two");
         assertThat(reloadable.version()).isNotEqualTo(first);
     }
+
+    @Test
+    void realComparatoPromptLoadsAndIsVersioned() {
+        var registry = new CustomerRegistry("../customers");
+        var comparato = registry.get("comparato");
+
+        assertThat(comparato.agentName()).isEqualTo("Anna");
+        assertThat(comparato.smsCharLimit()).isEqualTo(320);
+        assertThat(comparato.prompt().content()).contains("get_available_times");
+        assertThat(comparato.prompt().version()).matches("system-v1@[0-9a-f]{12}");
+        assertThat(comparato.infoPack().content()).contains("Comparato");
+    }
 }
