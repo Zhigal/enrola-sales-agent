@@ -71,6 +71,23 @@ class ControllerSmokeTest extends DbTest {
                 .andExpect(jsonPath("$.messages.length()").value(1));
     }
 
+    /** The reviewer's first click, without an API key: a finished thread and no model call. */
+    @Test
+    void clickingTheFirstLeadReturnsTheSeededConversation() throws Exception {
+        llm.reset(); // nothing queued: the stub throws if this path calls the model at all
+
+        mvc.perform(post("/api/conversations")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"leadId\":1}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(1))
+                .andExpect(jsonPath("$.status").value("GOAL_MET"))
+                .andExpect(jsonPath("$.messages.length()").value(9))
+                .andExpect(jsonPath("$.messages[8].structuredOutput.endReason").value("BOOKED"))
+                .andExpect(jsonPath("$.bookings.length()").value(1));
+
+        org.assertj.core.api.Assertions.assertThat(llm.callCount()).isZero();
+    }
+
     @Test
     void unknownConversationIs404() throws Exception {
         mvc.perform(get("/api/conversations/999999")).andExpect(status().isNotFound());
