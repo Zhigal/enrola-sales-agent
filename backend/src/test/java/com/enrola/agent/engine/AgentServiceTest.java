@@ -29,6 +29,10 @@ class AgentServiceTest extends DbTest {
     void resetStub() {
         llm.reset();
         calendly.reset();
+        // data.sql seeds a completed conversation for lead 1, and start() now resumes whatever
+        // a lead already has. These tests are about the turn machinery, so each one needs its
+        // lead to start with nothing - the seeded thread included.
+        conversations.deleteAll();
     }
 
     private static String turn(String message, Stage stage) {
@@ -53,6 +57,40 @@ class AgentServiceTest extends DbTest {
             assertThat(m.structuredOutput()).contains("SITUATION");
         });
         assertThat(conversation.status()).isEqualTo(ConversationStatus.ACTIVE);
+    }
+
+    /**
+     * The property that makes the seeded demo free: clicking a lead who already has a
+     * conversation must cost nothing. Nothing is queued on the stub, so any model call at all
+     * fails the test rather than quietly billing an opener.
+     */
+    @Test
+    void startResumesAnExistingConversationWithoutCallingTheModel() {
+        llm.queue(LlmResponse.message(turn("Opening question?", Stage.SITUATION)));
+        var first = agent.start(1L);
+
+        var second = agent.start(1L);
+
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(llm.callCount()).isEqualTo(1); // the opener, and nothing since
+        assertThat(conversations.findAll()).hasSize(1);
+        assertThat(messages.findByConversationIdOrderByIdAsc(first.id())).hasSize(1);
+    }
+
+    @Test
+    void startStillCreatesAndRunsATurnWhenTheLeadHasNoConversation() {
+        llm.queue(LlmResponse.message(turn("Opening question?", Stage.SITUATION)));
+
+        var conversation = agent.start(3L); // Jane
+
+        assertThat(conversation.id()).isNotNull();
+        assertThat(conversation.leadId()).isEqualTo(3L);
+        assertThat(llm.callCount()).isEqualTo(1);
+        assertThat(messages.findByConversationIdOrderByIdAsc(conversation.id())).singleElement()
+                .satisfies(m -> {
+                    assertThat(m.direction()).isEqualTo(MessageDirection.OUTBOUND);
+                    assertThat(m.body()).startsWith("Opening question?");
+                });
     }
 
     @Test
@@ -198,6 +236,30 @@ class AgentServiceTest extends DbTest {
         return messages.findByConversationIdOrderByIdAsc(id).stream()
                 .filter(m -> m.direction() == MessageDirection.OUTBOUND)
                 .map(m -> m.body()).reduce((a, b) -> b).orElseThrow();
+    }
+
+    /**
+     * The lead's fields are web-form input in the real system, so they are untrusted text. They
+     * still reach the model - at developer role, below the system guardrails, so a "given name"
+     * that is really a paragraph of instructions cannot be read as one.
+     */
+    @Test
+    void theLeadsFieldValuesReachTheModelAtDeveloperRoleNotSystem() {
+        llm.queue(LlmResponse.message(turn("Opening question?", Stage.SITUATION)));
+        agent.start(1L); // John / HBF / $350-$450, per data.sql
+
+        assertThat(roleContent("system")).doesNotContain("John", "HBF", "$350-$450");
+        assertThat(roleContent("developer")).contains("John", "WA", "HBF", "$350-$450");
+    }
+
+    /** Everything the model was told at one role, joined, as it actually received it. */
+    private String roleContent(String role) {
+        return llm.lastInput().stream()
+                .filter(InputItem.Text.class::isInstance)
+                .map(InputItem.Text.class::cast)
+                .filter(t -> t.role().equals(role))
+                .map(InputItem.Text::content)
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 
     @Test

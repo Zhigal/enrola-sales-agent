@@ -16,6 +16,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,7 +54,26 @@ class ScenarioLiveTest {
     /** Wednesday 5 August 2026, 08:00 Perth. Fixed so "tomorrow morning" means one thing. */
     static final Instant NOW = Instant.parse("2026-08-05T00:00:00Z");
 
-    private static final Path TRANSCRIPTS = Path.of("../evals/transcripts");
+    private static final Path TRANSCRIPTS = repoRoot().resolve("evals/transcripts");
+
+    /**
+     * Anchored to the repo rather than to a relative path, because the transcripts are a
+     * committed deliverable and writing them anywhere else must not look like success.
+     *
+     * {@code Path.of("../evals/transcripts")} resolves against the working directory. Surefire
+     * happens to set that to {@code backend/}, so it worked - but an IDE runner or a launch from
+     * the repo root resolves it outside the repo, and {@link Files#createDirectories} would then
+     * create that directory and write there without complaint.
+     */
+    private static Path repoRoot() {
+        for (var dir = Path.of("").toAbsolutePath(); dir != null; dir = dir.getParent()) {
+            if (Files.isDirectory(dir.resolve("customers/comparato"))) {
+                return dir;
+            }
+        }
+        throw new IllegalStateException("No ancestor of " + Path.of("").toAbsolutePath()
+                + " contains customers/comparato, so the repo root cannot be located");
+    }
 
     @Container
     @ServiceConnection
@@ -72,6 +92,16 @@ class ScenarioLiveTest {
     @Autowired AgentService agent;
     @Autowired ConversationRepository conversations;
     @Autowired MessageRepository messages;
+
+    /**
+     * start() resumes a lead's existing conversation, and data.sql seeds a finished one for
+     * lead 1. Every scenario below has to open its own thread, or scenario 1 would "pass" by
+     * asserting against the seeded transcript it is supposed to be regenerating.
+     */
+    @BeforeEach
+    void clearSeededConversations() {
+        conversations.deleteAll();
+    }
 
     private String lastOutbound(Long id) {
         return messages.findByConversationIdOrderByIdAsc(id).stream()

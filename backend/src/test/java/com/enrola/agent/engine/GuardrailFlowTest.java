@@ -23,6 +23,9 @@ class GuardrailFlowTest extends DbTest {
     @BeforeEach
     void resetStub() {
         llm.reset();
+        // start() resumes a lead's existing conversation, and data.sql seeds one for lead 1.
+        // Each test here needs a conversation it opened itself.
+        conversations.deleteAll();
     }
 
     private static String turn(String message) {
@@ -33,8 +36,12 @@ class GuardrailFlowTest extends DbTest {
     }
 
     private Long startedConversation() {
+        return startedConversation(1L);
+    }
+
+    private Long startedConversation(long leadId) {
         llm.queue(LlmResponse.message(turn("Opening question?")));
-        return agent.start(1L).id();
+        return agent.start(leadId).id();
     }
 
     private List<String> outbound(Long id) {
@@ -85,7 +92,10 @@ class GuardrailFlowTest extends DbTest {
         agent.handleInbound(fast, "unsubscribe");
 
         llm.reset();
-        var fuzzy = startedConversation();
+        // A second lead, because start() would otherwise hand back the conversation the fast
+        // path just unsubscribed. The reply is a constant, so which lead it goes to is irrelevant
+        // to what this test compares.
+        var fuzzy = startedConversation(2L);
         llm.queue(LlmResponse.message("""
             {"message":"Sure thing, sorry to bother you. Anything else?","stage":"CLOSED",
              "goalMet":false,"unsubscribed":true,"endConversation":true,

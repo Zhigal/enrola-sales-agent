@@ -38,8 +38,10 @@ class ControllerSmokeTest extends DbTest {
         llm.reset();
         llm.queue(LlmResponse.message(TURN), LlmResponse.message(TURN), LlmResponse.message(TURN));
 
+        // Lead 2: lead 1 has the seeded conversation from data.sql, and POST /api/conversations
+        // now resumes rather than creates. This test is about the create-and-run path.
         var body = mvc.perform(post("/api/conversations")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"leadId\":1}"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"leadId\":2}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.messages[0].direction").value("OUTBOUND"))
@@ -80,7 +82,7 @@ class ControllerSmokeTest extends DbTest {
         llm.queue(LlmResponse.message(TURN));
 
         var body = mvc.perform(post("/api/conversations")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"leadId\":1}"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"leadId\":3}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         var id = com.jayway.jsonpath.JsonPath.read(body, "$.id").toString();

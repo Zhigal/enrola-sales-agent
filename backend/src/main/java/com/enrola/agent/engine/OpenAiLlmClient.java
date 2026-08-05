@@ -118,7 +118,8 @@ public class OpenAiLlmClient implements LlmClient {
         times.put("name", "get_available_times");
         times.put("description",
                 "Available advisor call times between two instants. Returns a JSON array of "
-                        + "ISO-8601 start times with the lead's UTC offset applied.");
+                        + "ISO-8601 start times with the advisor's UTC offset applied - the "
+                        + "advisor's local times, which are not necessarily the lead's.");
         times.put("strict", true);
         var timesParams = times.putObject("parameters");
         timesParams.put("type", "object");

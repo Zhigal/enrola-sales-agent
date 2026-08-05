@@ -29,7 +29,8 @@ public class PromptBuilder {
         items.add(InputItem.system(customer.prompt().content()));
         items.add(InputItem.system("REFERENCE MATERIAL ABOUT THE CUSTOMER\n\n"
                 + customer.infoPack().content()));
-        items.add(InputItem.system(runtimeContext(customer, lead, conversation, history)));
+        items.add(InputItem.system(runtimeContext(customer, conversation, history)));
+        items.add(InputItem.developer(leadFacts(lead)));
 
         for (var message : history) {
             items.add(message.direction() == MessageDirection.OUTBOUND
@@ -53,7 +54,7 @@ public class PromptBuilder {
      * zone, and the leads are not all in it - telling the model it is the lead's zone would be
      * a plain falsehood the model then reasons from when it offers times.
      */
-    private String runtimeContext(CustomerConfig customer, Lead lead, Conversation conversation,
+    private String runtimeContext(CustomerConfig customer, Conversation conversation,
                                   List<Message> history) {
         var now = clock.instant().atZone(customer.timezone());
         return """
@@ -63,18 +64,27 @@ public class PromptBuilder {
             Character limit for each message: %d
             Current date and time in the advisor's timezone (%s): %s
             Objections this lead has already raised: %d
+            """.formatted(
+                customer.agentName(),
+                Guardrails.charBudget(customer.smsCharLimit(), history),
+                customer.timezone(),
+                HUMAN.format(now),
+                conversation.objectionCount());
+    }
 
+    /**
+     * Developer role, not system. Every value here came off a web form the lead filled in, so
+     * it is untrusted text; at system role it would sit at the same authority as the guardrails
+     * above it and a "given name" of a paragraph of instructions would read as one.
+     */
+    private String leadFacts(Lead lead) {
+        return """
             THE LEAD
             Given name: %s
             State: %s
             Current health insurer: %s
             Current monthly premium: %s
             """.formatted(
-                customer.agentName(),
-                Guardrails.charBudget(customer.smsCharLimit(), history),
-                customer.timezone(),
-                HUMAN.format(now),
-                conversation.objectionCount(),
                 lead.givenName(),
                 lead.state(),
                 lead.currentProvider() == null ? "none" : lead.currentProvider(),

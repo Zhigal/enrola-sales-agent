@@ -65,8 +65,18 @@ public class AgentService {
         this.model = model;
     }
 
+    /**
+     * Resume, don't restart. Creating a second conversation for a lead orphaned the first - the
+     * UI has no path back to it - and billed a fresh opening message every time the lead was
+     * clicked. It also made the seeded conversation in data.sql unreachable, which is the whole
+     * point of it. {@code reset} is how you start over, and it is unchanged.
+     */
     @Transactional
     public Conversation start(Long leadId) {
+        var existing = conversations.findFirstByLeadIdOrderByIdDesc(leadId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
         var lead = leads.findById(leadId).orElseThrow(
                 () -> new IllegalArgumentException("Unknown lead: " + leadId));
         var now = clock.instant();
@@ -84,8 +94,8 @@ public class AgentService {
         var lead = leads.findById(conversation.leadId()).orElseThrow();
 
         // History is read before the inbound is saved, so the current turn's message is not
-        // also in the transcript. Saving still happens before the model call, so a model
-        // failure leaves a record that the lead texted.
+        // also in the transcript. The whole turn is atomic: a model failure rolls this save
+        // back too, so no half-written turn survives and the lead's retry starts clean.
         var history = messages.findByConversationIdOrderByIdAsc(conversation.id());
         messages.save(Message.inbound(conversation.id(), body, clock.instant()));
 
