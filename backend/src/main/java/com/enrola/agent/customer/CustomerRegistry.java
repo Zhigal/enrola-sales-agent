@@ -33,6 +33,15 @@ public class CustomerRegistry {
         try (Stream<Path> dirs = Files.list(root)) {
             dirs.filter(Files::isDirectory).sorted().forEach(dir -> {
                 var yaml = read(dir.resolve("customer.yaml"));
+                var dirName = dir.getFileName().toString();
+                // The registry is keyed by id, so without this a copied directory whose yaml id
+                // was never edited silently overwrites the customer it was copied from - one
+                // entry in the map, no error. "Adding a customer is adding a directory" is the
+                // headline claim of this design; it has to fail loudly when it is not true.
+                if (!dirName.equals(yaml.id())) {
+                    throw new IllegalStateException("Customer directory '" + dirName
+                            + "' declares id '" + yaml.id() + "'. They must match.");
+                }
                 customers.put(yaml.id(), new CustomerConfig(
                         yaml.id(),
                         yaml.agentName(),
